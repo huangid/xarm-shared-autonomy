@@ -263,6 +263,23 @@ class GearMesh(AssemblyTask):
 
 
 @configclass
+class GearMeshIntent(GearMesh):
+    name = "gear_mesh_intent"
+
+    # Local override while training behaviors are being finalized; resolve_hf
+    # passes absolute paths through unchanged.
+    train_data_path: str = (
+        "/home/shuo/projects/Residual_Copilot_Deployment/logs/"
+        "shared_autonomy_online/260507_gearmesh_intent_processed/data/teleop_data.npy"
+    )
+
+    # Per-episode intent: list of ints in {0, 1, 2} = {small, medium, large}.
+    # Length must equal the number of episodes in train_data_path.
+    # Empty -> defaults to all-medium (matches gear_mesh).
+    eps_intent: list = [0] * 5 + [1] * 5 + [2] * 5
+
+
+@configclass
 class NutM32(HeldAssetCfg):
     usd_hf_file = "objects/m36_nut.usd"
     diameter = 0.024

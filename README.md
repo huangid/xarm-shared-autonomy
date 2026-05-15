@@ -83,7 +83,7 @@ python scripts/play.py \
 python scripts/play.py --task NutThread --pilot kNNPilot --num_envs 16
 ```
 
-**Arguments:** `--task` (GearMesh / PegInsert / NutThread), `--pilot` (see below), `--copilot` (optional), `--num_envs` (default 1), `--record` (save to `logs/rollouts/`), `--no_rand` (disable domain randomization).
+**Arguments:** `--task` (GearMesh / PegInsert / NutThread), `--pilot` (see below), `--copilot` (optional), `--num_envs` (default 1), `--record` (save to `logs/rollouts/`), `--no_rand` (disable domain randomization), `--checkpoint` (override the HF copilot download with a local `.pth`; only applies to RL-Games copilots `ResidualBC` / `ResidualCopilot`).
 
 **Pilots:**
 
@@ -105,7 +105,16 @@ python scripts/play.py --task NutThread --pilot kNNPilot --num_envs 16
 | `GuidedDiffusionBC` | Guided Diffusion trained on teleop data |
 | `GuidedDiffusionExpert` | Guided Diffusion trained on expert data |
 
-All checkpoints are auto-downloaded from HuggingFace on first use.
+All checkpoints are auto-downloaded from HuggingFace on first use. To evaluate a **local** RL-Games copilot checkpoint instead, pass `--checkpoint <path/to/FactoryXarm.pth>`:
+
+```bash
+python scripts/play.py \
+  --task GearMeshIntent --pilot NoisyPilot --copilot ResidualCopilot \
+  --checkpoint logs/rl_games/FactoryXarm/<run_name>/nn/FactoryXarm.pth \
+  --num_envs 15 --no_rand --record
+```
+
+`--checkpoint` only overrides RL-Games copilots (`ResidualBC`, `ResidualCopilot`). Combined with `--no_rand`, envs are run in deterministic order (one episode per env), so `--num_envs N` evaluates exactly `N` ordered episodes.
 
 ### Visualizing Residual Corrections
 

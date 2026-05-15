@@ -566,7 +566,8 @@ def main():
     ap.add_argument("--episodes", type=int, nargs="+", default=None,
                     metavar="N", help="Only process these episode indices (e.g. --episodes 0 3 7)")
     ap.add_argument("--crop", type=int, nargs=4,
-                    default=[50, -180, 230, -300],
+                    default=None,
+                    # default=[50, -180, 230, -300],
                     metavar=("Y0", "Y1", "X0", "X1"),
                     help="Crop each frame: y0 y1 x0 x1 in pixel coords (applied after annotation)")
     args = ap.parse_args()

@@ -10,7 +10,7 @@ from isaaclab.utils import configclass
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR, ISAAC_NUCLEUS_DIR
 
-from .assembly_tasks_cfg import AssemblyTask, GearMesh, NutThread, PegInsert, HF_ASSETS_REPO
+from .assembly_tasks_cfg import AssemblyTask, GearMesh, GearMeshIntent, NutThread, PegInsert, HF_ASSETS_REPO
 from ..utils.utils import resolve_hf
 
 OBS_DIM_CFG = {
@@ -120,8 +120,8 @@ class VisualizationCfg:
         )
     
     verbose = False
-    vis_obs = False
-    print_rew = False
+    vis_obs = True
+    print_rew = True
     order_envs = False
     store_rgb = False
 
@@ -287,6 +287,13 @@ class XArmPegInsertCfg(XArmEnvCfg):
 class XArmGearMeshCfg(XArmEnvCfg):
     task_name = "gear_mesh"
     task = GearMesh()
+    episode_length_s = 20.0
+
+
+@configclass
+class XArmGearMeshIntentCfg(XArmEnvCfg):
+    task_name = "gear_mesh_intent"
+    task = GearMeshIntent()
     episode_length_s = 20.0
 
 

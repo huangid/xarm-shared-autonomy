@@ -11,17 +11,21 @@ import time
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Play a pilot model, optionally with a copilot on top.")
-parser.add_argument("--task", type=str, required=True, choices=["GearMesh", "PegInsert", "NutThread"])
+parser.add_argument("--task", type=str, required=True, choices=["GearMesh", "GearMeshIntent", "PegInsert", "NutThread"])
 parser.add_argument("--pilot", type=str, required=True,
-                    choices=["LaggyPilot", "NoisyPilot", "ExpertPilot", "BCPilot", "kNNPilot", "ReplayPilot"],
+                    choices=["LaggyPilot", "NoisyPilot", "ExpertPilot", "BCPilot", "kNNPilot", "ReplayPilot", "ResidualPilot"],
                     help="Pilot (base) model to run.")
 parser.add_argument("--copilot", type=str, default=None,
                     choices=["GuidedDiffusionBC", "GuidedDiffusionExpert", "ResidualBC", "ResidualCopilot"],
                     help="Copilot (residual RL) model to load. If omitted, runs pilot-only with zero residual.")
+parser.add_argument("--checkpoint", type=str, default=None,
+                    help="Local checkpoint path to override the HuggingFace download for RL-Games copilots "
+                         "(ResidualBC, ResidualCopilot). Ignored for guided-diffusion copilots and pilot-only.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of parallel environments.")
 parser.add_argument("--record", action="store_true", default=False,
                     help="Record rollouts: save episode stats and RGB images to logs/rollouts/.")
 parser.add_argument("--no_rand", action="store_true", default=False, help="Disable domain randomization (keep sim deterministic).")
+parser.add_argument("--vis_obs", action="store_true", default=False, help="Enable held/target visualization markers.")
 AppLauncher.add_app_launcher_args(parser)
 # suppress verbose Kit/USD logs by default
 parser.set_defaults(kit_args="--/log/level=error --/log/fileLogLevel=error --/log/outputStreamLevel=error")
@@ -346,7 +350,13 @@ def main():
 
         method, hf_path = COPILOT_NAME_MAP[args_cli.copilot]
         task_id = f"XArm-{args_cli.task}-{method}"
-        resume_path = resolve_hf(HF_MODELS_REPO, hf_path, repo_type="model")
+        if args_cli.checkpoint is not None and method == "Residual":
+            resume_path = os.path.abspath(args_cli.checkpoint)
+            if not os.path.isfile(resume_path):
+                raise FileNotFoundError(f"--checkpoint not found: {resume_path}")
+            print(f"[INFO] Using local checkpoint: {resume_path}")
+        else:
+            resume_path = resolve_hf(HF_MODELS_REPO, hf_path, repo_type="model")
 
         if method == "GuidedDiffusion":
             # --- guided diffusion copilot (DiffusionPolicy, not RL-Games) ---
@@ -367,6 +377,9 @@ def main():
                     env_cfg.dmr.rand_ctrl = False
                     env_cfg.dmr.aug_data = False
                     env_cfg.vis.order_envs = True
+
+                if args_cli.vis_obs:
+                    env_cfg.vis.vis_obs = True
 
                 env = gym.make(task_id, cfg=env_cfg)
                 env.unwrapped.cfg_task.success_rotation_threshold_deg = 180.0
@@ -423,6 +436,9 @@ def main():
                     env_cfg.dmr.rand_ctrl = False
                     env_cfg.dmr.aug_data = False
                     env_cfg.vis.order_envs = True
+
+                if args_cli.vis_obs:
+                    env_cfg.vis.vis_obs = True
 
                 env = gym.make(task_id, cfg=env_cfg)
                 env.unwrapped.cfg_task.success_rotation_threshold_deg = 180.0
@@ -527,8 +543,17 @@ def main():
 
                 while simulation_app.is_running():
                     with torch.inference_mode():
+                        # DEBUG (tmp): snapshot episode_idx BEFORE step, since _reset_idx
+                        # auto-advances it post-step for done envs.
+                        _pre_step_eps_idx = env_unwrapped.episode_idx.clone()
+
                         obs, _rew, terminated, truncated, _info = env.step(zero_actions)
                         dones = terminated | truncated
+
+                        # DEBUG (tmp): per-env obj-tgt distance from env's own assembly_error,
+                        # which is computed in _get_dones BEFORE the auto-reset that clobbers held_pos.
+                        obj_tgt_dist_dbg = env_unwrapped.assembly_error
+                        # END DEBUG
 
                         obs_policy = obs["policy"] if isinstance(obs, dict) else obs
                         obs_np = obs_policy.detach().cpu().numpy()
@@ -579,10 +604,17 @@ def main():
                                     with open(os.path.join(robot_dir, f"{step_t:06d}.json"), "w") as f:
                                         json.dump(entry, f, indent=2)
 
+                                # DEBUG (tmp): success + obj-tgt distance conditioned on eps_idx
+                                _eps_idx = int(_pre_step_eps_idx[env_id].item())
+                                _intent_table = getattr(env_unwrapped, "eps_intent_table", None)
+                                _intent_id = int(_intent_table[_eps_idx].item()) if _intent_table is not None else -1
+                                _intent_lbl = {0: "small", 1: "medium", 2: "large", -1: "n/a"}[_intent_id]
+                                _dist = float(obj_tgt_dist_dbg[env_id].item())
                                 print(
-                                    f"[INFO] Episode {env_id} done at step {t}, "
-                                    f"succeeded: {ep_succeeded}"
+                                    f"\n[DBG] env={env_id} eps_idx={_eps_idx} intent={_intent_lbl} "
+                                    f"step={t} success={ep_succeeded} obj_tgt_dist={_dist:.4f}"
                                 )
+                                # END DEBUG
                             else:
                                 timesteps[env_id] += 1
 
@@ -607,12 +639,39 @@ def main():
             else:
                 obs, _ = env.reset()
                 episode_done = torch.zeros(num_envs, dtype=torch.bool, device=env_unwrapped.device)
+                timesteps = [0] * num_envs
                 global_step = 0
 
                 while simulation_app.is_running():
                     with torch.inference_mode():
+                        # DEBUG (tmp): snapshot episode_idx BEFORE step, since _reset_idx
+                        # auto-advances it post-step for done envs.
+                        _pre_step_eps_idx = env_unwrapped.episode_idx.clone()
+
                         obs, _rew, terminated, truncated, _info = env.step(zero_actions)
                         dones = terminated | truncated
+
+                        # DEBUG (tmp): print success + obj-tgt distance per env at episode-done.
+                        # Read env's own assembly_error (set in _get_dones BEFORE auto-reset).
+                        _new_dones = dones.bool() & ~episode_done
+                        if _new_dones.any():
+                            _obj_tgt_dist_dbg = env_unwrapped.assembly_error
+                            _intent_table = getattr(env_unwrapped, "eps_intent_table", None)
+                            for _env_id in _new_dones.nonzero(as_tuple=True)[0].tolist():
+                                _succ = bool(env_unwrapped.ep_succeeded[_env_id].item())
+                                _eps_idx = int(_pre_step_eps_idx[_env_id].item())
+                                _intent_id = int(_intent_table[_eps_idx].item()) if _intent_table is not None else -1
+                                _intent_lbl = {0: "small", 1: "medium", 2: "large", -1: "n/a"}[_intent_id]
+                                _dist = float(_obj_tgt_dist_dbg[_env_id].item())
+                                print(
+                                    f"\n[DBG] env={_env_id} eps_idx={_eps_idx} intent={_intent_lbl} "
+                                    f"step={timesteps[_env_id]} success={_succ} obj_tgt_dist={_dist:.4f}"
+                                )
+                        for _i in range(num_envs):
+                            if not episode_done[_i]:
+                                timesteps[_i] += 1
+                        # END DEBUG
+
                         episode_done |= dones.bool()
                         n_done = int(episode_done.sum().item())
                         print(f"\r[Step {global_step:5d}]  done: {n_done}/{num_envs}  ongoing: {num_envs - n_done}/{num_envs}", end="", flush=True)

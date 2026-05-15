@@ -118,7 +118,7 @@ class XArmEnv(DirectRLEnv):
         self.yaw_rotation_noise = torch.zeros((self.num_envs, 1), device=self.device)
 
         self.held_center_pos_local = torch.zeros((self.num_envs, 3), device=self.device)
-        if self.cfg_task.name == "gear_mesh":
+        if self.cfg_task.name in ("gear_mesh", "gear_mesh_intent"):
             self.held_center_pos_local[:, 0] += self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0]
             self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.grasp_offset[2]
         elif self.cfg_task.name == "peg_insert":
@@ -147,6 +147,17 @@ class XArmEnv(DirectRLEnv):
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.first_success = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
+
+        if self.cfg_task.name == "gear_mesh_intent":
+            fa = self.cfg_task.fixed_asset_cfg
+            # 0=small, 1=medium, 2=large -> (x,y,z) offset in gearbase local frame.
+            self.intent_offsets_lut = torch.tensor([
+                fa.small_gear_base_offset,
+                fa.medium_gear_base_offset,
+                fa.large_gear_base_offset,
+            ], device=self.device, dtype=torch.float32)  # (3, 3)
+            self.eps_intent_table = None  # populated in _init_pilot once total_episodes is known
+            self.current_target_offset = torch.zeros((self.num_envs, 3), device=self.device)
 
         self.rolling_success_rate = 0.0
         self.ema_alpha = 0.002  # ~350 ep half-life for 450-ts episodes
@@ -213,6 +224,20 @@ class XArmEnv(DirectRLEnv):
             self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
         else:
             self.episode_idx = torch.randint(0, self.total_episodes, (self.num_envs,), device=self.device)
+
+        if self.cfg_task.name == "gear_mesh_intent":
+            raw = self.cfg_task.eps_intent
+            if raw:
+                intent_arr = torch.as_tensor(raw, dtype=torch.long, device=self.device)
+                assert intent_arr.numel() == self.total_episodes, (
+                    f"eps_intent length {intent_arr.numel()} != total_episodes {self.total_episodes}"
+                )
+                assert ((intent_arr >= 0) & (intent_arr <= 2)).all(), \
+                    "eps_intent values must be in {0, 1, 2}"
+            else:
+                # Empty -> all medium, equivalent to gear_mesh.
+                intent_arr = torch.ones(self.total_episodes, dtype=torch.long, device=self.device)
+            self.eps_intent_table = intent_arr
 
     def _set_default_dynamics_parameters(self):
         """Set friction and action threshold tensors."""
@@ -594,10 +619,13 @@ class XArmEnv(DirectRLEnv):
             self.cfg_task.name, self.cfg_task.fixed_asset_cfg,
             self.num_envs, self.device,
         )
+        target_pos_local = (
+            self.current_target_offset if self.cfg_task.name == "gear_mesh_intent" else None
+        )
         target_pos, _ = get_target_held_base_pose(
             self.fixed_pos, self.fixed_quat,
             self.cfg_task.name, self.cfg_task.fixed_asset_cfg,
-            self.num_envs, self.device,
+            self.num_envs, self.device, target_pos_local=target_pos_local,
         )
         return held_pos, target_pos
 
@@ -610,7 +638,7 @@ class XArmEnv(DirectRLEnv):
         is_centered = xy_dist < 0.0025
 
         fixed_cfg = self.cfg_task.fixed_asset_cfg
-        if self.cfg_task.name in ("peg_insert", "gear_mesh"):
+        if self.cfg_task.name in ("peg_insert", "gear_mesh", "gear_mesh_intent"):
             height_threshold = fixed_cfg.height * success_threshold
         elif self.cfg_task.name == "nut_thread":
             height_threshold = success_threshold
@@ -786,8 +814,12 @@ class XArmEnv(DirectRLEnv):
         fixed_tip_pos_local = torch.zeros((n, 3), device=self.device)
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
         fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
-        if self.cfg_task.name == "gear_mesh":
+        if self.cfg_task.name in ("gear_mesh", "gear_mesh_intent"):
             fixed_tip_pos_local[:, 0] = self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0]  # type: ignore
+
+        if self.cfg_task.name == "gear_mesh_intent":
+            intent_ids = self.eps_intent_table[self.episode_idx[env_ids]]      # (n,)
+            self.current_target_offset[env_ids] = self.intent_offsets_lut[intent_ids]  # (n, 3)
 
         fixed_pos = self.initial_poses[env_ids, self.episode_idx[env_ids], -6:-3]
         fixed_pos = torch_utils.tf_combine(
@@ -917,5 +949,6 @@ class XArmEnv(DirectRLEnv):
     def _visualize_markers(self):
         """Visualize markers for debugging."""
         if self.cfg.vis.vis_obs:
-            self.held_asset_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins, self.held_quat)
-            self.fixed_asset_marker.visualize(self.fixed_pos_obs_frame + self.scene.env_origins, self.fixed_quat)
+            held_pos, target_pos = self._get_held_target_pos()
+            self.held_asset_marker.visualize(held_pos + self.scene.env_origins, self.held_quat)
+            self.fixed_asset_marker.visualize(target_pos + self.scene.env_origins, self.fixed_quat)

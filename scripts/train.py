@@ -44,7 +44,7 @@ parser.add_argument(
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
 parser.add_argument(
     "--pilot",
-    choices=["LaggyPilot", "NoisyPilot", "ExpertPilot", "BCPilot", "kNNPilot"],
+    choices=["LaggyPilot", "NoisyPilot", "ExpertPilot", "BCPilot", "kNNPilot", "ResidualPilot"],
     default=None,
     help="Pilot model to train against. Maps to (pilot_type, pilot_model) via PILOT_NAME_MAP.",
 )

@@ -31,6 +31,11 @@ def resolve_hf(
 
     Returns: str local path (file or directory).
     """
+    # Local-path passthrough: absolute paths that already exist on disk are
+    # returned as-is. Lets configs point at local data without going through HF.
+    if Path(path).is_absolute() and Path(path).exists():
+        return path
+
     path = path.strip("/")
 
     # 1) Try as a file first (fast path).
@@ -151,10 +156,18 @@ def get_held_base_pose(held_pos, held_quat, task_name, fixed_asset_cfg, num_envs
     return held_base_pos, held_base_quat
 
 
-def get_target_held_base_pose(fixed_pos, fixed_quat, task_name, fixed_asset_cfg, num_envs, device):
-    """Get target poses for keypoint and success computation."""
+def get_target_held_base_pose(fixed_pos, fixed_quat, task_name, fixed_asset_cfg, num_envs, device,
+                              target_pos_local=None):
+    """Get target poses for keypoint and success computation.
+
+    target_pos_local: optional (num_envs, 3) per-env override for the target
+        position in the fixed-asset's local frame. Used by gear_mesh_intent to
+        select among the small/medium/large peg offsets per episode.
+    """
     fixed_success_pos_local = torch.zeros((num_envs, 3), device=device)
-    if task_name == "gear_mesh":
+    if target_pos_local is not None:
+        fixed_success_pos_local[:] = target_pos_local
+    elif task_name == "gear_mesh":
         gear_base_offset = fixed_asset_cfg.medium_gear_base_offset
         fixed_success_pos_local[:, 0] = gear_base_offset[0]
         fixed_success_pos_local[:, 2] = gear_base_offset[2]
@@ -162,6 +175,11 @@ def get_target_held_base_pose(fixed_pos, fixed_quat, task_name, fixed_asset_cfg,
         fixed_success_pos_local[:, 2] = fixed_asset_cfg.nut_offset[2]
     elif task_name == "peg_insert":
         fixed_success_pos_local[:, 2] = 0.0
+    elif task_name == "gear_mesh_intent":
+        # Defensive fallback; caller should always pass target_pos_local.
+        gear_base_offset = fixed_asset_cfg.medium_gear_base_offset
+        fixed_success_pos_local[:, 0] = gear_base_offset[0]
+        fixed_success_pos_local[:, 2] = gear_base_offset[2]
     else:
         raise NotImplementedError("Task not implemented")
     fixed_success_quat_local = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).unsqueeze(0).repeat(num_envs, 1)
@@ -176,7 +194,7 @@ def get_held_base_pos_local(task_name, fixed_asset_cfg, num_envs, device):
     held_base_x_offset = 0.0
     if task_name == "peg_insert":
         held_base_z_offset = 0.0
-    elif task_name == "gear_mesh":
+    elif task_name in ("gear_mesh", "gear_mesh_intent"):
         gear_base_offset = fixed_asset_cfg.medium_gear_base_offset
         held_base_x_offset = gear_base_offset[0]
         held_base_z_offset = gear_base_offset[2]
