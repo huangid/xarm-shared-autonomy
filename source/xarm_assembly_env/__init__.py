@@ -12,7 +12,7 @@ from . import agents
 ##
 
 from .xarm_env_cfg import (
-    XArmGearMeshCfg, XArmGearMeshIntentCfg, XArmNutThreadCfg, XArmPegInsertCfg,
+    XArmGearMeshCfg, XArmGearMeshIntentCfg, XArmNutThreadCfg, XArmPegInsertCfg, XArmThreeBlocksCfg, 
     XArmGearMeshGuidedDiffusionCfg, XArmNutThreadGuidedDiffusionCfg, XArmPegInsertGuidedDiffusionCfg,
 )
 
@@ -36,6 +36,16 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": XArmGearMeshIntentCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="XArm-ThreeBlocks-Residual",
+    entry_point=f"{__name__}.xarm_env:XArmEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": XArmThreeBlocksCfg,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )

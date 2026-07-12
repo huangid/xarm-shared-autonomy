@@ -6,6 +6,7 @@ PILOT_NAME_MAP = {
     "ExpertPilot":   ("none",  "bc_expert"),
     "BCPilot":       ("none",  "bc_teleop"),
     "kNNPilot":      ("none",  "knn"),
+    "SpaceMousePilot": ("none",  "spacemouse"),
     "ResidualPilot": ("noisy", "knn"),
     "ReplayPilot":   ("none",  "replay"),
 }

@@ -11,12 +11,12 @@ import time
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Play a pilot model, optionally with a copilot on top.")
-parser.add_argument("--task", type=str, required=True, choices=["GearMesh", "GearMeshIntent", "PegInsert", "NutThread"])
+parser.add_argument("--task", type=str, required=True, choices=["GearMesh", "GearMeshIntent", "PegInsert", "NutThread", "ThreeBlocks"])
 parser.add_argument("--pilot", type=str, required=True,
-                    choices=["LaggyPilot", "NoisyPilot", "ExpertPilot", "BCPilot", "kNNPilot", "ReplayPilot", "ResidualPilot"],
+                    choices=["LaggyPilot", "NoisyPilot", "ExpertPilot", "BCPilot", "kNNPilot", "ReplayPilot", "ResidualPilot", "SpaceMousePilot"],
                     help="Pilot (base) model to run.")
 parser.add_argument("--copilot", type=str, default=None,
-                    choices=["GuidedDiffusionBC", "GuidedDiffusionExpert", "ResidualBC", "ResidualCopilot"],
+                    choices=["GuidedDiffusionBC", "GuidedDiffusionExpert", "DiSCo", "ResidualBC", "ResidualCopilot"],
                     help="Copilot (residual RL) model to load. If omitted, runs pilot-only with zero residual.")
 parser.add_argument("--checkpoint", type=str, default=None,
                     help="Local checkpoint path to override the HuggingFace download for RL-Games copilots "
@@ -56,6 +56,7 @@ from residual_copilot.utils.constants import PILOT_NAME_MAP
 
 COPILOT_NAME_MAP = {
     "GuidedDiffusionBC":     ("GuidedDiffusion", f"shared_autonomy_policies/bc_teleop/{args_cli.task}_bc_teleop"),
+    "DiSCo":                 ("GuidedDiffusion", f"shared_autonomy_policies/bc_teleop/{args_cli.task}_bc_teleop"),
     "GuidedDiffusionExpert": ("GuidedDiffusion", f"shared_autonomy_policies/bc_expert/{args_cli.task}_bc_expert"),
     "ResidualBC":            ("Residual",        f"shared_autonomy_policies/residual_copilot/{args_cli.task}_bc_teleop/nn/FactoryXarm.pth"),
     "ResidualCopilot":       ("Residual",        f"shared_autonomy_policies/residual_copilot/{args_cli.task}_noisy_knn/nn/FactoryXarm.pth"),
@@ -199,7 +200,8 @@ def _run_loop_guided_diffusion(env, env_unwrapped, policy):
         with torch.inference_mode():
             dp_obs = _build_dp_obs(env_unwrapped)
             base_actions = env_unwrapped.base_actions
-            actions = policy.act(dp_obs, ref_action=base_actions)
+            is_idle = getattr(env_unwrapped.pilot, "is_idle", False)
+            actions = policy.act(dp_obs, ref_action=base_actions, is_idle=is_idle)
 
             obs, _rew, terminated, truncated, _info = env.step(actions)
             dones = terminated | truncated
@@ -350,9 +352,9 @@ def main():
 
         method, hf_path = COPILOT_NAME_MAP[args_cli.copilot]
         task_id = f"XArm-{args_cli.task}-{method}"
-        if args_cli.checkpoint is not None and method == "Residual":
+        if args_cli.checkpoint is not None and method in ("Residual", "GuidedDiffusion"):
             resume_path = os.path.abspath(args_cli.checkpoint)
-            if not os.path.isfile(resume_path):
+            if not os.path.exists(resume_path):
                 raise FileNotFoundError(f"--checkpoint not found: {resume_path}")
             print(f"[INFO] Using local checkpoint: {resume_path}")
         else:
@@ -384,7 +386,11 @@ def main():
                 env = gym.make(task_id, cfg=env_cfg)
                 env.unwrapped.cfg_task.success_rotation_threshold_deg = 180.0
 
-                policy = BC_Pilot(resume_path)
+                if args_cli.copilot == "DiSCo":
+                    from residual_copilot.pilot_models.disco_pilot import DiSCo_Pilot
+                    policy = DiSCo_Pilot(resume_path)
+                else:
+                    policy = BC_Pilot(resume_path)
 
                 if args_cli.record:
                     env_u = env.unwrapped

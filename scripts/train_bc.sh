@@ -36,3 +36,4 @@ python third_party/lerobot/src/lerobot/scripts/lerobot_train.py \
     --dataset.repo_id $repo_id \
     --output_dir outputs/train/${repo_id}_${job_name} \
     --job_name ${repo_id}_${job_name} \
+    --wandb.enable=false

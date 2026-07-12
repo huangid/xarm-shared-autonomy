@@ -58,7 +58,7 @@ class BC_Pilot:
             pretrained_path=model_id,
         )
 
-    def act(self, obs: Dict[str, Any], ref_action: Tensor | None = None):
+    def act(self, obs: Dict[str, Any], ref_action: Tensor | None = None, **kwargs):
         """Run a single observation through preprocessor, model and postprocessor.
 
         The `obs` argument should be in the LeRobot observation format expected by the processors

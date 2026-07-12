@@ -10,7 +10,7 @@ from isaaclab.utils import configclass
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR, ISAAC_NUCLEUS_DIR
 
-from .assembly_tasks_cfg import AssemblyTask, GearMesh, GearMeshIntent, NutThread, PegInsert, HF_ASSETS_REPO
+from .assembly_tasks_cfg import AssemblyTask, GearMesh, GearMeshIntent, NutThread, PegInsert, ThreeBlocks, HF_ASSETS_REPO
 from ..utils.utils import resolve_hf
 
 OBS_DIM_CFG = {
@@ -296,6 +296,11 @@ class XArmGearMeshIntentCfg(XArmEnvCfg):
     task = GearMeshIntent()
     episode_length_s = 20.0
 
+@configclass
+class XArmThreeBlocksCfg(XArmEnvCfg):
+    task_name = "three_blocks"
+    task = ThreeBlocks()
+    episode_length_s = 60.0
 
 @configclass
 class XArmNutThreadCfg(XArmEnvCfg):

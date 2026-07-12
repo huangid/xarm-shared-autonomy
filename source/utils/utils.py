@@ -180,6 +180,8 @@ def get_target_held_base_pose(fixed_pos, fixed_quat, task_name, fixed_asset_cfg,
         gear_base_offset = fixed_asset_cfg.medium_gear_base_offset
         fixed_success_pos_local[:, 0] = gear_base_offset[0]
         fixed_success_pos_local[:, 2] = gear_base_offset[2]
+    elif task_name == "three_blocks":
+        pass
     else:
         raise NotImplementedError("Task not implemented")
     fixed_success_quat_local = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).unsqueeze(0).repeat(num_envs, 1)
@@ -199,6 +201,8 @@ def get_held_base_pos_local(task_name, fixed_asset_cfg, num_envs, device):
         held_base_x_offset = gear_base_offset[0]
         held_base_z_offset = gear_base_offset[2]
     elif task_name == "nut_thread":
+        held_base_z_offset = 0.0
+    elif task_name == "three_blocks":
         held_base_z_offset = 0.0
     else:
         raise NotImplementedError("Task not implemented")

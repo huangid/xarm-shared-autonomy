@@ -13,7 +13,7 @@ import carb # type: ignore
 import isaacsim.core.utils.torch as torch_utils # type: ignore
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation
+from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import TiledCamera, ContactSensor
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
@@ -30,6 +30,7 @@ from .xarm_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, XArmEnvCfg
 from .assembly_tasks_cfg import HF_ASSETS_REPO, HF_MODELS_REPO, HF_DATA_REPO
 
 from residual_copilot.pilot_models.knn_pilot import KNN_Pilot
+from residual_copilot.pilot_models.spacemouse_pilot import SpaceMousePilot
 from residual_copilot.pilot_models.bc_pilot import BC_Pilot
 
 _KNN_CFG_PATH = str(Path(__file__).parent.parent / "pilot_models/config/knn_cfg.json")
@@ -65,11 +66,22 @@ class XArmEnv(DirectRLEnv):
         )
 
         self._robot = Articulation(self.cfg.robot)
-        self._fixed_asset = Articulation(self.cfg_task.fixed_asset) # type: ignore
-        self._held_asset = Articulation(self.cfg_task.held_asset) # type: ignore
+        if self.cfg_task.name == "three_blocks":
+            self._fixed_asset = RigidObject(self.cfg_task.fixed_asset)
+        else:
+            self._fixed_asset = Articulation(self.cfg_task.fixed_asset)
+        if self.cfg_task.name == "three_blocks":
+            self._held_asset = RigidObject(self.cfg_task.held_asset)
+        else:
+            self._held_asset = Articulation(self.cfg_task.held_asset)
         if self.cfg_task.name == "gear_mesh":
             self._small_gear_asset = Articulation(self.cfg_task.small_gear_cfg) # type: ignore
             self._large_gear_asset = Articulation(self.cfg_task.large_gear_cfg) # type: ignore
+
+        if self.cfg_task.name == "three_blocks":
+            self._block_a = self._held_asset
+            self._block_b = RigidObject(self.cfg_task.block_b_cfg)
+            self._block_c = RigidObject(self.cfg_task.block_c_cfg)
 
         self.eef_contact_sensor = ContactSensor(self.cfg.eef_contact_sensor_cfg)
         self.scene.sensors["eef_contact_sensor"] = self.eef_contact_sensor
@@ -86,11 +98,18 @@ class XArmEnv(DirectRLEnv):
             self.scene.filter_collisions()
 
         self.scene.articulations["robot"] = self._robot
-        self.scene.articulations["fixed_asset"] = self._fixed_asset
-        self.scene.articulations["held_asset"] = self._held_asset
+        if self.cfg_task.name == "three_blocks":
+            self.scene.rigid_objects["fixed_asset"] = self._fixed_asset
+            self.scene.rigid_objects["held_asset"] = self._held_asset
+        else:
+            self.scene.articulations["fixed_asset"] = self._fixed_asset
+            self.scene.articulations["held_asset"] = self._held_asset
         if self.cfg_task.name == "gear_mesh":
             self.scene.articulations["small_gear"] = self._small_gear_asset
             self.scene.articulations["large_gear"] = self._large_gear_asset
+        if self.cfg_task.name == "three_blocks":
+            self.scene.rigid_objects["block_b"] = self._block_b
+            self.scene.rigid_objects["block_c"] = self._block_c
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -162,6 +181,7 @@ class XArmEnv(DirectRLEnv):
         self.rolling_success_rate = 0.0
         self.ema_alpha = 0.002  # ~350 ep half-life for 450-ts episodes
 
+        self.blocks_binned = torch.zeros((self.num_envs, 3), dtype=torch.bool, device=self.device)
         self.residual_actions = torch.zeros((self.num_envs, self.cfg.action_space), device=self.device)
         self.prev_actions = torch.zeros_like(self.residual_actions)
         self.env_actions = torch.zeros((self.num_envs, 8), device=self.device)
@@ -189,6 +209,13 @@ class XArmEnv(DirectRLEnv):
             self.picked_up = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
     def _init_pilot(self):
+        import sys; print("PILOT_MODEL =", repr(self.cfg.pilot_model), file=sys.stderr, flush=True)
+        # For three_blocks, load demos from a local file; otherwise resolve from HuggingFace.
+        if self.cfg_task.name == "three_blocks":
+            _data_path = self.cfg_task.train_data_path
+        else:
+            _data_path = resolve_hf(HF_DATA_REPO, self.cfg_task.train_data_path)
+
         """Load pilot model and initial episode states from HuggingFace."""
         if self.cfg.pilot_model in ["bc_teleop", "bc_expert"]:
             ckpt_path = self.cfg_task.dp_expert_path if self.cfg.pilot_model == "bc_expert" else self.cfg_task.dp_teleop_path
@@ -196,10 +223,15 @@ class XArmEnv(DirectRLEnv):
         elif self.cfg.pilot_model in ["knn", "replay"]:
             self.pilot = KNN_Pilot(
                 cfg_path=_KNN_CFG_PATH,
-                data_path=resolve_hf(HF_DATA_REPO, self.cfg_task.train_data_path),
+                data_path=_data_path,
                 num_envs=self.num_envs,
                 device=self.device,
                 replay_mode=(self.cfg.pilot_model == "replay"),
+            )
+        elif self.cfg.pilot_model == "spacemouse":
+            self.pilot = SpaceMousePilot(
+                num_envs=self.num_envs,
+                device=self.device,
             )
         else:
             raise ValueError(f"Unknown pilot model: {self.cfg.pilot_model}")
@@ -213,7 +245,7 @@ class XArmEnv(DirectRLEnv):
 
         # Initial states (fingertip pose + fixed/held positions per episode).
         self.initial_poses = build_init_state(
-            data_path=resolve_hf(HF_DATA_REPO, self.cfg_task.train_data_path),
+            data_path=_data_path,
             num_envs=self.num_envs,
             dtype=torch.float32,
             device=self.device,
@@ -263,7 +295,7 @@ class XArmEnv(DirectRLEnv):
         """Get actor/critic inputs using asymmetric critic."""
         self.last_base_actions[self.has_last_base] = self.base_actions.clone()[self.has_last_base]
 
-        if self.cfg.pilot_model in ["knn", "replay"]:
+        if self.cfg.pilot_model in ["knn", "replay", "spacemouse"]:
             self._get_knn_pilot_action()
         elif self.cfg.pilot_model in ["bc_teleop", "bc_expert"]:
             self._get_bc_pilot_action()
@@ -394,8 +426,35 @@ class XArmEnv(DirectRLEnv):
         self.fixed_pos = self._fixed_asset.data.root_pos_w - self.scene.env_origins
         self.fixed_quat = self._fixed_asset.data.root_quat_w
 
-        self.held_pos = self._held_asset.data.root_pos_w - self.scene.env_origins
-        self.held_quat = self._held_asset.data.root_quat_w
+        if self.cfg_task.name == "three_blocks" and hasattr(self, "fingertip_midpoint_pos"):
+            pos_a = self._block_a.data.root_pos_w - self.scene.env_origins
+            pos_b = self._block_b.data.root_pos_w - self.scene.env_origins
+            pos_c = self._block_c.data.root_pos_w - self.scene.env_origins
+            positions = torch.stack([pos_a, pos_b, pos_c], dim=1)          # (N,3,3)
+            quats = torch.stack([
+                self._block_a.data.root_quat_w,
+                self._block_b.data.root_quat_w,
+                self._block_c.data.root_quat_w,
+            ], dim=1)                                                       # (N,3,4)
+
+            # Detect which blocks are in the bin (xy within tolerance of bin center).
+            bin_pos = self._fixed_asset.data.root_pos_w - self.scene.env_origins  # (N,3)
+            block_xy_dist = torch.norm(positions[:, :, :2] - bin_pos[:, None, :2], dim=2)  # (N,3)
+            block_z = positions[:, :, 2]
+            bin_z = bin_pos[:, None, 2]
+            self.blocks_binned = (block_xy_dist < 0.05) & (block_z < bin_z + 0.05)
+
+            dists = torch.norm(self.fingertip_midpoint_pos.unsqueeze(1) - positions, dim=2)  # (N,3)
+            # Exclude already-binned blocks from selection so we target the next one.
+            if hasattr(self, "blocks_binned"):
+                dists = dists.masked_fill(self.blocks_binned, float("inf"))
+            idx = torch.argmin(dists, dim=1)                               # (N,)
+            ar = torch.arange(self.num_envs, device=self.device)
+            self.held_pos = positions[ar, idx]
+            self.held_quat = quats[ar, idx]
+        else:
+            self.held_pos = self._held_asset.data.root_pos_w - self.scene.env_origins
+            self.held_quat = self._held_asset.data.root_quat_w
 
         self.held_pos_obs_frame = torch_utils.tf_combine(
             self.held_quat,
@@ -460,6 +519,16 @@ class XArmEnv(DirectRLEnv):
 
         self.residual_actions = self.ema_factor * action.clone().to(self.device) + (1 - self.ema_factor) * self.residual_actions
 
+        # Idle-hold: when the SpaceMouse is idle, suppress the residual so the arm
+        # holds still (only assist when the user is actively driving).
+        if self.cfg_task.name == "three_blocks":
+            is_idle = getattr(self.pilot, "is_idle", None)
+            if is_idle is not None:
+                idle_mask = torch.as_tensor(is_idle, device=self.device).view(-1, 1)
+                self.residual_actions = torch.where(
+                    idle_mask, torch.zeros_like(self.residual_actions), self.residual_actions
+                )
+
         self.env_actions = self._apply_residual(self.residual_actions, self.base_actions)
 
         ctrl_target_fingertip_midpoint_pos = self.env_actions[:, 0:3].clone()
@@ -487,6 +556,8 @@ class XArmEnv(DirectRLEnv):
 
     def _apply_residual(self, residual_actions, base_actions):
         """Combine base and residual actions into a Cartesian target."""
+        if self.cfg_task.name == "three_blocks":
+            residual_actions = residual_actions * 2
         pos_actions = residual_actions[:, 0:3] * self.pos_threshold
         ctrl_target_fingertip_midpoint_pos = base_actions[:, 0:3] + pos_actions
 
@@ -546,7 +617,10 @@ class XArmEnv(DirectRLEnv):
         self.first_success = task_success & (~self.ep_succeeded.to(torch.bool))
         self.ep_succeeded[task_success] = 1
 
-        terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.2
+        if self.cfg_task.name == "three_blocks":
+            terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        else:
+            terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.2
         terminated |= self.ep_succeeded.bool()
 
         if self.cfg_task.name == "peg_insert":
@@ -610,6 +684,9 @@ class XArmEnv(DirectRLEnv):
         else:
             assembly_error = torch.linalg.vector_norm(held_pos - target_pos, dim=1)
 
+        if self.cfg_task.name == "three_blocks" and hasattr(self, "blocks_binned"):
+            assembled = self.blocks_binned.all(dim=1)
+
         return assembled, assembly_error
 
     def _get_held_target_pos(self):
@@ -635,12 +712,17 @@ class XArmEnv(DirectRLEnv):
 
         xy_dist = torch.linalg.vector_norm(target_pos[:, :2] - held_pos[:, :2], dim=1)
         z_disp = held_pos[:, 2] - target_pos[:, 2]
-        is_centered = xy_dist < 0.0025
+        if self.cfg_task.name == "three_blocks":
+            is_centered = xy_dist < 0.05
+        else:
+            is_centered = xy_dist < 0.0025
 
         fixed_cfg = self.cfg_task.fixed_asset_cfg
         if self.cfg_task.name in ("peg_insert", "gear_mesh", "gear_mesh_intent"):
             height_threshold = fixed_cfg.height * success_threshold
         elif self.cfg_task.name == "nut_thread":
+            height_threshold = success_threshold
+        elif self.cfg_task.name == "three_blocks":
             height_threshold = success_threshold
         else:
             raise NotImplementedError(f"Task '{self.cfg_task.name}' not implemented")
@@ -808,6 +890,10 @@ class XArmEnv(DirectRLEnv):
             identity_quat, held_pos, identity_quat, -self.held_center_pos_local[env_ids],
         )[1]
         held_pos[:, :2] += translation_noise
+        if self.cfg_task.name == "three_blocks":
+            held_pos[:, 0] = 0.40      # red block x
+            held_pos[:, 1] = -0.15    # red block y
+            held_pos[:, 2] = 0.05     # on table
         held_quat = torch_utils.quat_mul(identity_quat, yaw_delta_quat)
 
         # Fixed asset pose.
@@ -827,6 +913,10 @@ class XArmEnv(DirectRLEnv):
         )[1]
         fixed_pos[:, :2] += translation_noise
         fixed_pos[:, 2] += fixed_height_noise
+        if self.cfg_task.name == "three_blocks":
+            fixed_pos[:, 0] = 0.6
+            fixed_pos[:, 1] = 0.0
+            fixed_pos[:, 2] = 0.0025
         fixed_quat = torch_utils.quat_mul(identity_quat, yaw_delta_quat)
 
         self._set_assets_state(
@@ -855,7 +945,7 @@ class XArmEnv(DirectRLEnv):
         # Reset pilot.
         if self.cfg.pilot_model in ["bc_teleop", "bc_expert"]:
             self.pilot.reset()
-        elif self.cfg.pilot_model in ["knn", "replay"]:
+        elif self.cfg.pilot_model in ["knn", "replay", "spacemouse"]:
             self.pilot.clear(env_ids)
         self.has_last_base[env_ids] = False
 
@@ -886,6 +976,8 @@ class XArmEnv(DirectRLEnv):
 
     def _reset_buffers(self, env_ids):
         """Reset per-episode tracking buffers."""
+        if self.cfg_task.name == "three_blocks" and hasattr(self, "blocks_binned"):
+            self.blocks_binned[env_ids] = False
         self.ep_succeeded[env_ids] = 0
         self.ep_success_times[env_ids] = 0
         self.first_success[env_ids] = False
@@ -912,6 +1004,21 @@ class XArmEnv(DirectRLEnv):
                 gear_asset.write_root_pose_to_sim(gear_state[:, 0:7], env_ids=env_ids)
                 gear_asset.write_root_velocity_to_sim(gear_state[:, 7:], env_ids=env_ids)
                 gear_asset.reset(env_ids=env_ids)
+
+        if self.cfg_task.name == "three_blocks":
+            block_positions = [(0.4, -0.15), (0.4, 0.0), (0.4, 0.15)]  # (x, y) row
+            for block, (bx, by) in zip(
+                (self._block_b, self._block_c), block_positions[1:]
+            ):
+                bstate = block.data.default_root_state.clone()[env_ids]
+                bstate[:, 0] = bx + self.scene.env_origins[env_ids][:, 0]
+                bstate[:, 1] = by + self.scene.env_origins[env_ids][:, 1]
+                bstate[:, 2] = 0.05 + self.scene.env_origins[env_ids][:, 2]
+                bstate[:, 3:7] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device)
+                bstate[:, 7:] = 0.0
+                block.write_root_pose_to_sim(bstate[:, 0:7], env_ids=env_ids)
+                block.write_root_velocity_to_sim(bstate[:, 7:], env_ids=env_ids)
+                block.reset(env_ids=env_ids)
 
         held_state = torch.zeros((len(env_ids), 13), device=self.device)
         held_state[:, 0:3] = held_pos + self.scene.env_origins[env_ids]

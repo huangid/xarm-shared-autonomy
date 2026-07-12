@@ -1,5 +1,5 @@
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
@@ -261,6 +261,77 @@ class GearMesh(AssemblyTask):
         debug_vis=False,
     )
 
+@configclass
+class ThreeBlocks(AssemblyTask):
+    train_data_path = "logs/data/threeblocks_seq_demos.npy"
+    # train_data_path: str = "teleop/nutthread_train_data.npy"
+    name = "three_blocks"
+    duration_s = 20.0
+    close_gripper: float = 0.7
+    success_threshold: float = 0.05
+    gripper_obs_clamp: float = 0.7
+    gripper_ctrl_clamp: float = 1.2
+
+    fixed_asset_cfg = FixedAssetCfg()
+    held_asset_cfg = HeldAssetCfg()
+
+    block_a_cfg: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/BlockA",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.03, 0.03, 0.03),
+            rigid_props=_default_rigid_props(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.02),
+            collision_props=_default_collision_props(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
+            activate_contact_sensors = True,
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.5, -0.15, 0.05), rot=(1.0, 0.0, 0.0, 0.0)),
+    )
+
+    block_b_cfg: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/BlockB",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.03, 0.03, 0.03),
+            rigid_props=_default_rigid_props(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.02),
+            collision_props=_default_collision_props(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.5, 0.0, 0.05), rot=(1.0, 0.0, 0.0, 0.0)),
+    )
+
+    block_c_cfg: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/BlockC",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.03, 0.03, 0.03),
+            rigid_props=_default_rigid_props(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.02),
+            collision_props=_default_collision_props(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.5, 0.15, 0.05), rot=(1.0, 0.0, 0.0, 0.0)),
+    )
+
+    fixed_asset: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/Bin",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.12, 0.12, 0.04),
+            rigid_props=_default_rigid_props(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=_default_collision_props(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.4, 0.4, 0.4)),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.65, 0.0, 0.0025), rot=(1.0, 0.0, 0.0, 0.0)),
+    )
+
+    held_asset = block_a_cfg
+
+    held_asset_contact_sensor_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/BlockA",
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+    )
 
 @configclass
 class GearMeshIntent(GearMesh):
