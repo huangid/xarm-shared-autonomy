@@ -324,3 +324,8 @@ class XArmGearMeshGuidedDiffusionCfg(XArmGearMeshCfg):
 @configclass
 class XArmNutThreadGuidedDiffusionCfg(XArmNutThreadCfg):
     action_space: int = 8
+
+
+@configclass
+class XArmThreeBlocksGuidedDiffusionCfg(XArmThreeBlocksCfg):
+    action_space: int = 8

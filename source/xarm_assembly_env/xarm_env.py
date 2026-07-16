@@ -310,6 +310,13 @@ class XArmEnv(DirectRLEnv):
 
         obs_dict, state_dict = self._get_obs_state_dict()
 
+        for k, v in obs_dict.items():
+            if torch.is_tensor(v) and not torch.isfinite(v).all():
+                print(f"NaN/Inf in obs_dict['{k}']", flush=True)
+        for k, v in state_dict.items():
+            if torch.is_tensor(v) and not torch.isfinite(v).all():
+                print(f"NaN/Inf in state_dict['{k}']", flush=True)
+
         obs_tensors = collapse_obs_dict(obs_dict, self.cfg.obs_order + ["prev_actions"])
         state_tensors = collapse_obs_dict(state_dict, self.cfg.state_order + ["prev_actions"])
 
@@ -447,7 +454,7 @@ class XArmEnv(DirectRLEnv):
             dists = torch.norm(self.fingertip_midpoint_pos.unsqueeze(1) - positions, dim=2)  # (N,3)
             # Exclude already-binned blocks from selection so we target the next one.
             if hasattr(self, "blocks_binned"):
-                dists = dists.masked_fill(self.blocks_binned, float("inf"))
+                dists = dists.masked_fill(self.blocks_binned, 1e6)
             idx = torch.argmin(dists, dim=1)                               # (N,)
             ar = torch.arange(self.num_envs, device=self.device)
             self.held_pos = positions[ar, idx]
@@ -557,13 +564,19 @@ class XArmEnv(DirectRLEnv):
     def _apply_residual(self, residual_actions, base_actions):
         """Combine base and residual actions into a Cartesian target."""
         if self.cfg_task.name == "three_blocks":
-            residual_actions = residual_actions * 2
+            residual_actions = residual_actions * 1
         pos_actions = residual_actions[:, 0:3] * self.pos_threshold
         ctrl_target_fingertip_midpoint_pos = base_actions[:, 0:3] + pos_actions
+        # Keep the IK target inside the reachable workspace — a wild target
+        # during early RL exploration diverges the physics solver.
+        ctrl_target_fingertip_midpoint_pos = ctrl_target_fingertip_midpoint_pos.clamp(
+            torch.tensor([-0.2, -0.6, 0.0], device=self.device),
+            torch.tensor([1.0,  0.6, 0.8], device=self.device),
+        )
 
         rot_actions = residual_actions[:, 3:6] * self.rot_threshold
         angle = torch.norm(rot_actions, p=2, dim=-1)
-        axis = rot_actions / angle.unsqueeze(-1)
+        axis = rot_actions / angle.unsqueeze(-1).clamp(min=1e-6)
         rot_actions_quat = torch_utils.quat_from_angle_axis(angle, axis)
         rot_actions_quat = torch.where(
             angle.unsqueeze(-1).repeat(1, 4) > 1e-6,
@@ -574,6 +587,10 @@ class XArmEnv(DirectRLEnv):
 
         grip_actions = residual_actions[:, 6:7] * self.gripper_threshold
         ctrl_target_gripper_dof_pos = torch.clamp(base_actions[:, 7:8] + grip_actions, 0.0, 1.0)
+
+        ctrl_target_fingertip_midpoint_pos = torch.nan_to_num(
+            ctrl_target_fingertip_midpoint_pos, nan=0.0, posinf=0.0, neginf=0.0
+        ).clamp(-2.0, 2.0)
 
         return torch.cat([
             ctrl_target_fingertip_midpoint_pos,
@@ -617,10 +634,19 @@ class XArmEnv(DirectRLEnv):
         self.first_success = task_success & (~self.ep_succeeded.to(torch.bool))
         self.ep_succeeded[task_success] = 1
 
+        # Safety net against admittance/IK divergence (e.g. a contact-force spike blowing up
+        # the admittance integrator): the reachable workspace is well within 1.2 m of the env
+        # origin, so a fingertip that lands far outside that — or goes non-finite — means the
+        # episode has diverged and must be reset before it corrupts observations with NaNs.
+        diverged = (~torch.isfinite(self.fingertip_midpoint_pos).all(dim=1)) | (
+            torch.norm(self.fingertip_midpoint_pos, dim=1) > 2.0
+        )
+
         if self.cfg_task.name == "three_blocks":
-            terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+            terminated = diverged
         else:
             terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.2
+            terminated |= diverged
         terminated |= self.ep_succeeded.bool()
 
         if self.cfg_task.name == "peg_insert":

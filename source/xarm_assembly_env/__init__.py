@@ -12,8 +12,9 @@ from . import agents
 ##
 
 from .xarm_env_cfg import (
-    XArmGearMeshCfg, XArmGearMeshIntentCfg, XArmNutThreadCfg, XArmPegInsertCfg, XArmThreeBlocksCfg, 
+    XArmGearMeshCfg, XArmGearMeshIntentCfg, XArmNutThreadCfg, XArmPegInsertCfg, XArmThreeBlocksCfg,
     XArmGearMeshGuidedDiffusionCfg, XArmNutThreadGuidedDiffusionCfg, XArmPegInsertGuidedDiffusionCfg,
+    XArmThreeBlocksGuidedDiffusionCfg,
 )
 
 """
@@ -100,6 +101,16 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": XArmPegInsertGuidedDiffusionCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="XArm-ThreeBlocks-GuidedDiffusion",
+    entry_point=f"{__name__}.xarm_env_guided_diffusion:XArmEnvGuidedDiffusion",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": XArmThreeBlocksGuidedDiffusionCfg,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )

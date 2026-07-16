@@ -265,6 +265,10 @@ class GearMesh(AssemblyTask):
 class ThreeBlocks(AssemblyTask):
     train_data_path = "logs/data/threeblocks_seq_demos.npy"
     # train_data_path: str = "teleop/nutthread_train_data.npy"
+    dp_expert_path: str = (
+        "/home/wisc-rt2-trimanual/xarm-shared-autonomy/outputs/train/"
+        "threeblocks_expert_50_bc_expert/checkpoints/060000/pretrained_model"
+    )
     name = "three_blocks"
     duration_s = 20.0
     close_gripper: float = 0.7

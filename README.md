@@ -1,14 +1,9 @@
 # Efficient and Reliable Teleoperation through Real2Sim2Real Shared Autonomy
 
-[Shuo Sha](https://shuosha.github.io/)<sup>1</sup>, [Yixuan Wang](http://www.yixuanwang.me/)<sup>1</sup>, [Binghao Huang](https://binghao-huang.github.io/)<sup>1</sup>, [Antonio Loquercio](https://antonilo.github.io/)<sup>2</sup>, [Yunzhu Li](https://yunzhuli.github.io/)<sup>1</sup>
+## Links
 
-<sup>1</sup>Columbia University &emsp; <sup>2</sup>University of Pennsylvania
-
-**[Paper](https://residual-copilot.github.io/files/paper.pdf) | [Project Page](https://residual-copilot.github.io) | [Deploy Code](https://github.com/shuosha/Residual_Copilot_Deployment) | [Data & Checkpoints](https://huggingface.co/collections/shashuo0104/residual-copilot)**
-
-https://github.com/user-attachments/assets/d5ac4c24-50ef-4844-a1d1-6f6d63a4e2d6
-
-(Video has sound.)
+- **Code:** https://github.com/shuosha/Residual_Copilot
+- **Paper:** https://arxiv.org/abs/2603.22787
 
 ---
 
@@ -24,6 +19,7 @@ https://github.com/user-attachments/assets/d5ac4c24-50ef-4844-a1d1-6f6d63a4e2d6
   - [Training Residual Copilot](#training-residual-copilot)
   - [Training Guided Diffusion Copilot](#training-guided-diffusion-copilot)
   - [Adding New Tasks and Models](#adding-new-tasks-and-models)
+- [Three Blocks: SpaceMouse Teleop Workflow](#three-blocks-spacemouse-teleop-workflow)
 - [HuggingFace Collection](#huggingface-collection)
 
 ## Installation
@@ -83,7 +79,9 @@ python scripts/play.py \
 python scripts/play.py --task NutThread --pilot kNNPilot --num_envs 16
 ```
 
-**Arguments:** `--task` (GearMesh / PegInsert / NutThread), `--pilot` (see below), `--copilot` (optional), `--num_envs` (default 1), `--record` (save to `logs/rollouts/`), `--no_rand` (disable domain randomization), `--checkpoint` (override the HF copilot download with a local `.pth`; only applies to RL-Games copilots `ResidualBC` / `ResidualCopilot`).
+**Arguments:** `--task` (`GearMesh` / `GearMeshIntent` / `PegInsert` / `NutThread` / `ThreeBlocks`), `--pilot` (see below), `--copilot` (optional), `--num_envs` (default 1), `--record` (save to `logs/rollouts/`), `--no_rand` (disable domain randomization), `--vis_obs` (show held/target visualization markers), `--checkpoint` (override the HF copilot download with a local path; applies to RL-Games copilots `ResidualBC` / `ResidualCopilot` as well as guided-diffusion copilots `GuidedDiffusionBC` / `GuidedDiffusionExpert` / `DiSCo`).
+
+`GearMeshIntent` is a gear-mesh variant where each demo episode targets one of three gear slots (small/medium/large); `ThreeBlocks` is a multi-goal block-sorting task (pick up to 3 blocks into a bin) primarily driven by `SpaceMousePilot` for live shared-autonomy teleop.
 
 **Pilots:**
 
@@ -95,6 +93,7 @@ python scripts/play.py --task NutThread --pilot kNNPilot --num_envs 16
 | `NoisyPilot` | Expert BC + mistakeful behaviors (noisy actions) |
 | `LaggyPilot` | Expert BC + laggy behaviors (repeat actions) |
 | `ReplayPilot` | Replay recorded episodes |
+| `SpaceMousePilot` | Live human teleop via a 3Dconnexion SpaceMouse (real HID device required) |
 
 **Copilots:**
 
@@ -104,6 +103,7 @@ python scripts/play.py --task NutThread --pilot kNNPilot --num_envs 16
 | `ResidualBC` | Residual RL trained with BC  pilot |
 | `GuidedDiffusionBC` | Guided Diffusion trained on teleop data |
 | `GuidedDiffusionExpert` | Guided Diffusion trained on expert data |
+| `DiSCo` | Guided-diffusion copilot with DiSCo sampling (seed/inpaint toward the pilot's reference action) + beta-blend; used for live shared-autonomy assistance, e.g. with `SpaceMousePilot` on `ThreeBlocks` |
 
 All checkpoints are auto-downloaded from HuggingFace on first use. To evaluate a **local** RL-Games copilot checkpoint instead, pass `--checkpoint <path/to/FactoryXarm.pth>`:
 
@@ -114,7 +114,16 @@ python scripts/play.py \
   --num_envs 15 --no_rand --record
 ```
 
-`--checkpoint` only overrides RL-Games copilots (`ResidualBC`, `ResidualCopilot`). Combined with `--no_rand`, envs are run in deterministic order (one episode per env), so `--num_envs N` evaluates exactly `N` ordered episodes.
+Combined with `--no_rand`, envs are run in deterministic order (one episode per env), so `--num_envs N` evaluates exactly `N` ordered episodes.
+
+For guided-diffusion copilots (`GuidedDiffusionBC`/`GuidedDiffusionExpert`/`DiSCo`), `--checkpoint` points at a LeRobot `pretrained_model` directory instead of an RL-Games `.pth`:
+
+```bash
+# DiSCo copilot assisting a live SpaceMouse pilot, from a locally-trained checkpoint
+python scripts/play.py \
+  --task ThreeBlocks --pilot SpaceMousePilot --copilot DiSCo --num_envs 1 \
+  --checkpoint outputs/train/threeblocks_expert_50_bc_expert/checkpoints/060000/pretrained_model
+```
 
 ### Visualizing Residual Corrections
 
@@ -215,9 +224,71 @@ The `dataset_path` can be a HuggingFace dataset ID or a locally collected datase
 
 #### New Pilot Model
 
-1. Implement in `source/pilot_models/` with `predict()` and `reset()` methods (see `knn_pilot.py`)
+1. Implement in `source/pilot_models/` with `get_actions(episode_idx, pos, quat, grip)` (returns an 8D pos+quat+gripper base action) and `clear(env_ids)` methods for retrieval-style pilots (see `knn_pilot.py`), or `act(obs)` / `reset()` for learned policies (see `bc_pilot.py`)
 2. Register in `_init_pilot()` in `xarm_env.py`
 3. Add mapping in `source/utils/constants.py` (`PILOT_NAME_MAP`)
+
+## Three Blocks: SpaceMouse Teleop Workflow
+
+`ThreeBlocks` is a multi-goal block-sorting task (pick up to 3 blocks into a bin) driven live by a physical [SpaceMouse](https://3dconnexion.com/) via `SpaceMousePilot`, rather than pre-recorded teleop/expert `.npy` data. This is the end-to-end loop for collecting demos, converting them to the kNN dataset format, and training a residual copilot on top.
+
+**1. Drive the task by hand** (sanity-check the SpaceMouse connection and controls):
+
+```bash
+python scripts/play.py --task ThreeBlocks --pilot SpaceMousePilot --num_envs 1
+```
+
+**2. Record demos:**
+
+```bash
+python scripts/play.py --task ThreeBlocks --pilot SpaceMousePilot --num_envs 1 --record
+```
+
+**3. Append the recording to your dataset** (`convert_demos.py` reads `logs/rollouts/<dir>`, keeps only successful episodes per `meta/stats.json`, and writes/appends to a single `.npy`):
+
+```bash
+python scripts/convert_demos.py \
+  --rollout_dir logs/rollouts/eval_ThreeBlocks_with_SpaceMousePilot \
+  --output logs/data/threeblocks_seq_demos.npy --append
+```
+
+**4. Verify the output loads in kNN format:**
+
+```bash
+python -c "import numpy as np; print('episodes:', len(np.load('logs/data/threeblocks_seq_demos.npy', allow_pickle=True).item()))"
+```
+
+**5. Test the kNN pilot** against the newly appended demos:
+
+```bash
+python scripts/play.py --task ThreeBlocks --pilot kNNPilot --num_envs 1
+```
+
+**6. Train the residual copilot** (long-running — disable auto-suspend first if training on a laptop/workstation):
+
+```bash
+# disable auto-suspend (long run)
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+
+# train
+python scripts/train.py --task XArm-ThreeBlocks-Residual --pilot kNNPilot --num_envs 128 --headless
+```
+
+**7. Run the trained copilot live**, assisting the SpaceMouse pilot:
+
+```bash
+python scripts/play.py \
+  --task ThreeBlocks --pilot SpaceMousePilot --copilot ResidualCopilot --num_envs 1 \
+  --checkpoint logs/rl_games/FactoryXarm/none/nn/last_FactoryXarm_ep_400_rew_-109.26714.pth
+```
+
+**8. Alternative: run a DiSCo guided-diffusion copilot live**, from a BC checkpoint trained on the recorded demos (see [Training Guided Diffusion Copilot](#training-guided-diffusion-copilot) to train one against `threeblocks_seq_demos.npy`):
+
+```bash
+python scripts/play.py \
+  --task ThreeBlocks --pilot SpaceMousePilot --copilot DiSCo --num_envs 1 \
+  --checkpoint outputs/train/threeblocks_expert_50_bc_expert/checkpoints/060000/pretrained_model
+```
 
 ## HuggingFace Collection
 
