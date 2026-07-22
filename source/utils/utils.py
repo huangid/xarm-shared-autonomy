@@ -49,13 +49,19 @@ def resolve_hf(
         )
         file_local = Path(file_local)
 
-        if not materialize:
-            return str(file_local)
+        # `path` can also be a directory prefix. If it's already cached locally
+        # from a prior snapshot_download(), hf_hub_download() may resolve it to
+        # that existing directory instead of raising EntryNotFoundError — fall
+        # through to the directory/prefix case below instead of treating it as
+        # a file.
+        if not file_local.is_dir():
+            if not materialize:
+                return str(file_local)
 
-        stage_root = Path(tempfile.mkdtemp(prefix="hf_materialized_"))
-        dst = stage_root / file_local.name
-        shutil.copy2(file_local, dst)  # dereference into a real file
-        return str(dst)
+            stage_root = Path(tempfile.mkdtemp(prefix="hf_materialized_"))
+            dst = stage_root / file_local.name
+            shutil.copy2(file_local, dst)  # dereference into a real file
+            return str(dst)
 
     except EntryNotFoundError:
         # Not a file -> treat as directory/prefix below.

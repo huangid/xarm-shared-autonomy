@@ -47,9 +47,9 @@ class SpaceMousePilot:
                     with self._lock:
                         self._pos = np.array([x, y, z])
                 elif rid == 2 and len(data) >= 7:
-                    rx = _to_int16(data[1], data[2]) / 350.0
-                    ry = -_to_int16(data[3], data[4]) / 350.0
-                    rz = _to_int16(data[5], data[6]) / 350.0
+                    rx = -_to_int16(data[1], data[2]) / 350.0
+                    ry = _to_int16(data[3], data[4]) / 350.0
+                    rz = -_to_int16(data[5], data[6]) / 350.0
                     with self._lock:
                         self._rot = np.array([rx, ry, rz])
                 elif rid == 3:

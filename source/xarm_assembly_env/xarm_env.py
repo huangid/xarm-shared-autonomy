@@ -82,6 +82,10 @@ class XArmEnv(DirectRLEnv):
             self._block_a = self._held_asset
             self._block_b = RigidObject(self.cfg_task.block_b_cfg)
             self._block_c = RigidObject(self.cfg_task.block_c_cfg)
+            self._bin_wall_front = RigidObject(self.cfg_task.bin_wall_front_cfg)
+            self._bin_wall_back = RigidObject(self.cfg_task.bin_wall_back_cfg)
+            self._bin_wall_left = RigidObject(self.cfg_task.bin_wall_left_cfg)
+            self._bin_wall_right = RigidObject(self.cfg_task.bin_wall_right_cfg)
 
         self.eef_contact_sensor = ContactSensor(self.cfg.eef_contact_sensor_cfg)
         self.scene.sensors["eef_contact_sensor"] = self.eef_contact_sensor
@@ -110,6 +114,10 @@ class XArmEnv(DirectRLEnv):
         if self.cfg_task.name == "three_blocks":
             self.scene.rigid_objects["block_b"] = self._block_b
             self.scene.rigid_objects["block_c"] = self._block_c
+            self.scene.rigid_objects["bin_wall_front"] = self._bin_wall_front
+            self.scene.rigid_objects["bin_wall_back"] = self._bin_wall_back
+            self.scene.rigid_objects["bin_wall_left"] = self._bin_wall_left
+            self.scene.rigid_objects["bin_wall_right"] = self._bin_wall_right
 
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -943,7 +951,9 @@ class XArmEnv(DirectRLEnv):
             fixed_pos[:, 0] = 0.6
             fixed_pos[:, 1] = 0.0
             fixed_pos[:, 2] = 0.0025
-        fixed_quat = torch_utils.quat_mul(identity_quat, yaw_delta_quat)
+            fixed_quat = identity_quat  # bin pose is fully fixed — no yaw randomization
+        else:
+            fixed_quat = torch_utils.quat_mul(identity_quat, yaw_delta_quat)
 
         self._set_assets_state(
             held_pos=held_pos, held_quat=held_quat,
@@ -1045,6 +1055,27 @@ class XArmEnv(DirectRLEnv):
                 block.write_root_pose_to_sim(bstate[:, 0:7], env_ids=env_ids)
                 block.write_root_velocity_to_sim(bstate[:, 7:], env_ids=env_ids)
                 block.reset(env_ids=env_ids)
+
+            # Bin walls: locked to the bin's own (fixed_pos, fixed_quat) via a local offset,
+            # so the 5-piece hollow box (bottom + 4 walls) always moves as one rigid unit.
+            identity_quat_n = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(
+                len(env_ids), 1
+            )
+            wall_specs = (
+                (self._bin_wall_front, self.cfg_task.bin_wall_front_local_offset),
+                (self._bin_wall_back, self.cfg_task.bin_wall_back_local_offset),
+                (self._bin_wall_left, self.cfg_task.bin_wall_left_local_offset),
+                (self._bin_wall_right, self.cfg_task.bin_wall_right_local_offset),
+            )
+            for wall, local_offset in wall_specs:
+                local_offset_t = torch.tensor([local_offset], device=self.device).repeat(len(env_ids), 1)
+                _, wall_pos = torch_utils.tf_combine(fixed_quat, fixed_pos, identity_quat_n, local_offset_t)
+                wall_state = torch.zeros((len(env_ids), 13), device=self.device)
+                wall_state[:, 0:3] = wall_pos + self.scene.env_origins[env_ids]
+                wall_state[:, 3:7] = fixed_quat
+                wall.write_root_pose_to_sim(wall_state[:, 0:7], env_ids=env_ids)
+                wall.write_root_velocity_to_sim(wall_state[:, 7:], env_ids=env_ids)
+                wall.reset(env_ids=env_ids)
 
         held_state = torch.zeros((len(env_ids), 13), device=self.device)
         held_state[:, 0:3] = held_pos + self.scene.env_origins[env_ids]

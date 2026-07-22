@@ -13,16 +13,21 @@ class DiSCo_Pilot(BC_Pilot):
                 gamma: float = 0.3, rho: float = 1.0, beta: float = 0.6):
         super().__init__(model_id, device=device)
         self.gamma, self.rho, self.beta = gamma, rho, beta
-        dm = self.policy.diffusion
-        dm._use_disco = True
-        dm._disco_gamma = gamma
-        dm._disco_rho = rho
 
     def act(self, obs: Dict[str, Any], ref_action: Tensor | None = None, is_idle: bool = False):
         processed = self.preprocessor(obs)
         ref_norm = self.ref_action_processor(ref_action) if ref_action is not None else None
         with torch.inference_mode():
-            action_tensor = self.policy.select_action(processed, ref_action=ref_norm)
+            # DiSCo (Wang et al., HRI '26): seed the reverse diffusion process by
+            # forward-diffusing the pilot's current action, then inpaint the known
+            # part of the sequence during the first k_ip of the k_sw reverse steps
+            # that get run — see DiffusionModel.conditional_sample for the mechanics.
+            action_tensor = self.policy.select_action(
+                processed,
+                disco_seed=ref_norm,
+                disco_gamma=self.gamma,
+                disco_rho=self.rho,
+            )
         out = self.postprocessor(action_tensor).to(self.device)
         if ref_action is not None and self.beta > 0.0:
             u = ref_action.to(out.device, out.dtype)
