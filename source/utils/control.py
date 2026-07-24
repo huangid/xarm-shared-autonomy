@@ -72,6 +72,17 @@ def adm_ctrl_task_space(
     vdot = (F_ext - F_sd) / M
     v = v + dt * vdot
 
+    # Safety clamp: a hard contact-force spike (e.g. colliding with a rigid body that
+    # doesn't yield, like a kinematic bin wall) can otherwise blow up this integrator
+    # in a single step, producing a Cartesian target far outside the reachable
+    # workspace that IK then rejects — and the runaway state persists and only slowly
+    # decays back down over the following steps, showing up as erratic motion.
+    MAX_LIN_VEL, MAX_ANG_VEL = 2.0, 8.0  # m/s, rad/s
+    lin_speed = v[:, :3].norm(dim=1, keepdim=True).clamp(min=1e-8)
+    v[:, :3] = v[:, :3] * (lin_speed.clamp(max=MAX_LIN_VEL) / lin_speed)
+    ang_speed = v[:, 3:].norm(dim=1, keepdim=True).clamp(min=1e-8)
+    v[:, 3:] = v[:, 3:] * (ang_speed.clamp(max=MAX_ANG_VEL) / ang_speed)
+
     pos_cmd = pos + dt * v[:, :3]
     angle = (v[:, 3:] * dt).norm(dim=1)                    # (N,)
     axis  = (v[:, 3:] * dt) / (angle.unsqueeze(1) + 1e-8)  # (N, 3)

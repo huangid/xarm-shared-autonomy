@@ -11,10 +11,9 @@ HF_ASSETS_REPO = "shashuo0104/residual_copilot_assets"   # robot URDF/USD, objec
 HF_MODELS_REPO = "shashuo0104/residual_copilot_models"   # BC + RL checkpoints
 HF_DATA_REPO   = "shashuo0104/residual_copilot_data"     # .npy training data
 
-def _default_rigid_props(disable_gravity: bool = False, kinematic_enabled: bool = False) -> sim_utils.RigidBodyPropertiesCfg:
+def _default_rigid_props(disable_gravity: bool = False) -> sim_utils.RigidBodyPropertiesCfg:
     return sim_utils.RigidBodyPropertiesCfg(
         disable_gravity=disable_gravity,
-        kinematic_enabled=kinematic_enabled,
         max_depenetration_velocity=5.0,
         linear_damping=0.0,
         angular_damping=0.0,
@@ -317,82 +316,20 @@ class ThreeBlocks(AssemblyTask):
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.5, 0.15, 0.05), rot=(1.0, 0.0, 0.0, 0.0)),
     )
 
-    # Bin geometry: a hollow open-top container built from 5 kinematic pieces (a floor
-    # plate + 4 walls) rather than a single solid cuboid, so blocks can actually be
-    # dropped in and rest against real walls. `fixed_asset` (the floor plate) keeps
-    # its existing pose semantics unchanged — it's still exactly what `fixed_pos` /
-    # success-check target tracks. The walls are purely additive, offset upward from
-    # the floor plate's own center so they sit on top of it, not straddling it.
-    bin_footprint = (0.12, 0.12)  # outer XY footprint
-    bin_wall_thickness = 0.01
-    bin_floor_thickness = bin_wall_thickness
-    bin_wall_height = 0.04
-    _bin_half_x = bin_footprint[0] / 2 - bin_wall_thickness / 2
-    _bin_half_y = bin_footprint[1] / 2 - bin_wall_thickness / 2
-    _bin_wall_center_z = bin_floor_thickness / 2 + bin_wall_height / 2  # relative to the floor's own center
-    bin_wall_front_local_offset = (0.0, -_bin_half_y, _bin_wall_center_z)
-    bin_wall_back_local_offset = (0.0, _bin_half_y, _bin_wall_center_z)
-    bin_wall_left_local_offset = (-_bin_half_x, 0.0, _bin_wall_center_z)
-    bin_wall_right_local_offset = (_bin_half_x, 0.0, _bin_wall_center_z)
-
+    # Reverted to the original solid bin (matching the geometry threeblocks_seq_demos.npy
+    # was actually recorded against) — the hollow walled version kept causing collisions
+    # between the recorded/replayed pilot trajectories and wall geometry that didn't exist
+    # at record time. Re-introduce walls only alongside a re-recorded demo set.
     fixed_asset: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Bin",
         spawn=sim_utils.CuboidCfg(
-            size=(bin_footprint[0], bin_footprint[1], bin_floor_thickness),
-            rigid_props=_default_rigid_props(kinematic_enabled=True),  # fixed in place; still collides
+            size=(0.12, 0.12, 0.04),
+            rigid_props=_default_rigid_props(),
             mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
             collision_props=_default_collision_props(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.4, 0.4, 0.4)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.6, 0.0, 0.0025), rot=(1.0, 0.0, 0.0, 0.0)),
-    )
-
-    bin_wall_front_cfg: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/BinWallFront",
-        spawn=sim_utils.CuboidCfg(
-            size=(bin_footprint[0], bin_wall_thickness, bin_wall_height),
-            rigid_props=_default_rigid_props(kinematic_enabled=True),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
-            collision_props=_default_collision_props(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.4, 0.4, 0.4)),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0)),
-    )
-
-    bin_wall_back_cfg: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/BinWallBack",
-        spawn=sim_utils.CuboidCfg(
-            size=(bin_footprint[0], bin_wall_thickness, bin_wall_height),
-            rigid_props=_default_rigid_props(kinematic_enabled=True),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
-            collision_props=_default_collision_props(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.4, 0.4, 0.4)),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0)),
-    )
-
-    bin_wall_left_cfg: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/BinWallLeft",
-        spawn=sim_utils.CuboidCfg(
-            size=(bin_wall_thickness, bin_footprint[1], bin_wall_height),
-            rigid_props=_default_rigid_props(kinematic_enabled=True),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
-            collision_props=_default_collision_props(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.4, 0.4, 0.4)),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0)),
-    )
-
-    bin_wall_right_cfg: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/BinWallRight",
-        spawn=sim_utils.CuboidCfg(
-            size=(bin_wall_thickness, bin_footprint[1], bin_wall_height),
-            rigid_props=_default_rigid_props(kinematic_enabled=True),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
-            collision_props=_default_collision_props(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.4, 0.4, 0.4)),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.65, 0.0, 0.0025), rot=(1.0, 0.0, 0.0, 0.0)),
     )
 
     held_asset = block_a_cfg
